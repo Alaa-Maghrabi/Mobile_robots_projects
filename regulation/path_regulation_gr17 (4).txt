@@ -1,0 +1,177 @@
+#include "path_regulation_gr17.h"
+#include "useful_gr17.h"
+#include "init_pos_gr17.h"
+#include "speed_regulation_gr17.h"
+#include "math.h"
+#include <vector>
+#include "path_planning_gr17.h"
+#include "opp_pos_gr17.h"
+
+using namespace std;
+
+NAMESPACE_INIT(ctrlGr17);
+
+#define	EPS_DISTANCE		0.004
+#define	EPS_DEG				0.0001
+#define RAD_DEG				180/M_PI
+
+bool state_turn = true;
+
+int step_path = 0, iter;
+
+double distance(double x1, double y1, double x2, double y2)
+{
+	return sqrt(pow((x1 - x2), 2) + pow((y1 - y2), 2));
+}
+/*! \brief follow a given path
+*
+* \param[in,out] cvs controller main structure
+*/
+void follow_path(CtrlStruct *cvs,PathPlanning* pa, int restart_path)
+{
+	double dtheta;
+	point *inter = pa->path;
+	int size = pa->length;
+	RobotPosition *rob_pos;
+	rob_pos = cvs->rob_pos;
+
+	if (step_path == size)
+	{
+		speed_regulation(cvs, 0, 0);
+		state_turn = true;
+		//step_path = 0;
+		return;
+	}
+	if (restart_path == 1)
+	{
+		state_turn = true;
+		step_path = 0;
+	}
+	
+	if (rob_pos->x == inter[step_path].x) {
+		if (inter[step_path].y > rob_pos->y) dtheta = 90 - rob_pos->theta;
+		if (inter[step_path].y < rob_pos->y) dtheta = -90 - rob_pos->theta;
+	}
+	else dtheta = RAD_DEG*atan((inter[step_path].y - rob_pos->y) / (inter[step_path].x - rob_pos->x)) - rob_pos->theta;//Find difference between the theta and the robot and the theta between the two positions 
+
+
+	if ((atan((inter[step_path].y - rob_pos->y) / (inter[step_path].x - rob_pos->x)) > 0) && (((inter[step_path].y - rob_pos->y) < 0) || ((inter[step_path].x - rob_pos->x) < 0)))
+		dtheta = dtheta - 180;
+	
+	if ((atan((inter[step_path].y - rob_pos->y) / (inter[step_path].x - rob_pos->x)) < 0) && (((inter[step_path].y - rob_pos->y) > 0) || ((inter[step_path].x - rob_pos->x) < 0)))
+		dtheta = dtheta + 180;
+	if (dtheta > 180) dtheta = dtheta - 2 * 180;
+	if (dtheta < -180) dtheta = dtheta + 2 * 180;//dtheta has to stay between -180 and 180
+
+
+	//if ((step_path == 0) && (state_turn == true))printf("DTHETA is : %lf  ITER: %d \n", dtheta, iter);
+	iter++;
+	//printf("STEP %d X: %f Y: %f \n", step_path, rob_pos->x, rob_pos->y);
+
+		if ((state_turn == true) && (abs(dtheta) > EPS_DEG)) {
+			if (dtheta > 0) {
+				if (dtheta > 2) speed_regulation(cvs, 15, -15);
+				else/* if (dtheta > 0.02)*/ speed_regulation(cvs, 1, -1);
+				//else speed_regulation(cvs, 0.015, -0.015); //Turn clockwise
+			}
+			else {
+				if (dtheta < -2) speed_regulation(cvs, -15, 15);
+				else /*if (dtheta < -0.02)*/ speed_regulation(cvs, -1, 1);
+				//else speed_regulation(cvs, -0.015, 0.015); //Turn counterclockwise
+			}
+		}//Robot turns in the faster way to get aligned with the path 
+		else if ((abs(dtheta) < EPS_DEG) && (state_turn == true))
+		{
+			state_turn = false;
+			//speed_regulation(cvs, 0, 0); //Robot is at the right position
+		}
+
+		if ((state_turn == false) && (distance(rob_pos->x, rob_pos->y, inter[step_path].x, inter[step_path].y) > EPS_DISTANCE))
+		{
+			if(abs(dtheta)<5000*EPS_DEG)
+			speed_regulation(cvs, 20, 20);
+
+			if (dtheta > 5000*EPS_DEG) {
+				 speed_regulation(cvs, 15, -15);
+				//else/* if (dtheta > 0.02)*/ speed_regulation(cvs, 1, -1);
+				//else speed_regulation(cvs, 0.015, -0.015); //Turn clockwise
+			}
+			if (dtheta < -5000*EPS_DEG){
+				 speed_regulation(cvs, -15, 15);
+				//else /*if (dtheta < -0.02)*/ speed_regulation(cvs, -1, 1);
+				//else speed_regulation(cvs, -0.015, 0.015); //Turn counterclockwise
+			}
+		}
+
+		else if ((state_turn == false) && (distance(rob_pos->x, rob_pos->y, inter[step_path].x, inter[step_path].y) < EPS_DISTANCE))
+		{
+			//state_turn = true;
+			step_path++;
+			//speed_regulation(cvs, 0, 0); //Robot is at the right position
+		}
+	
+}
+
+int opp_avoid(CtrlStruct *cvs, int opp_front)
+{
+	int nb_opp;
+	OpponentsPosition *opp_pos;
+	RobotPosition *rob_pos;
+	static double first_x, first_y,first_theta;
+	double dtheta;
+	
+	// variables initialization
+	rob_pos = cvs->rob_pos;
+	opp_pos = cvs->opp_pos;
+	nb_opp = opp_pos->nb_opp;
+
+	if (opp_front == 0)
+	{
+		first_x = rob_pos->x;
+		first_y = rob_pos->y;
+		first_theta = rob_pos->theta;
+	}
+
+	if (rob_pos->x == opp_pos->x[0]) {
+		if (opp_pos->y[0] > rob_pos->y) dtheta = 90 - rob_pos->theta;
+		if (opp_pos->y[0] < rob_pos->y) dtheta = -90 - rob_pos->theta;
+	}
+	else dtheta = RAD_DEG*atan((opp_pos->y[0] - rob_pos->y) / (opp_pos->x[0] - rob_pos->x)) - rob_pos->theta;
+
+	if ((atan((opp_pos->y[0] - rob_pos->y) / (opp_pos->x[0] - rob_pos->x)) > 0) && (((opp_pos->y[0] - rob_pos->y) < 0) || ((opp_pos->x[0] - rob_pos->x) < 0)))
+		dtheta = dtheta - 180;
+
+	if ((atan((opp_pos->y[0] - rob_pos->y) / (opp_pos->x[0] - rob_pos->x)) < 0) && (((opp_pos->y[0] - rob_pos->y) > 0) || ((opp_pos->x[0] - rob_pos->x) < 0)))
+		dtheta = dtheta + 180;
+	if (dtheta > 180) dtheta = dtheta - 2 * 180;
+	if (dtheta < -180) dtheta = dtheta + 2 * 180;
+	
+	if (dtheta > 0) 
+	{
+		dtheta = dtheta - 90;
+	}
+
+	else
+	{
+		dtheta = dtheta + 90;
+	}
+
+	if (dtheta > 1)
+	{
+		speed_regulation(cvs, 3, -3);
+	}
+
+	else if(dtheta < -1)
+	{
+		speed_regulation(cvs, -3, 3);
+	}
+
+	if(abs(dtheta)<1) speed_regulation(cvs, 50, 50);
+
+	if (rob_pos->x - (first_x + 0.15*cos(first_theta)) < 0.02  && rob_pos->y - (first_y + 0.15*sin(first_theta)) < 0.02)
+		return 0;
+
+	return 1;
+}
+NAMESPACE_CLOSE();
+
